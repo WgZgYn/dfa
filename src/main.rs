@@ -1,124 +1,104 @@
-trait Sequence {
+use crate::number::test_number;
+
+mod identity;
+mod machine;
+mod number;
+mod trans_table;
+
+pub trait Sequence {
     type Item;
-    fn peek(&self) -> Option<&Self::Item>;
+    fn peek(&mut self) -> Option<&Self::Item>;
+    fn next(&mut self) -> Option<Self::Item>;
+
+    // Just for test
+    fn next_unwrap(&mut self) -> Self::Item {
+        self.next().unwrap()
+    }
     fn advance(&mut self);
 }
 
-trait Trans<I, S: State = usize> {
-    fn trans(&self, curr: S, input: &I) -> Option<S>;
-}
+impl<I> Sequence for Box<dyn Sequence<Item = I>> {
+    type Item = I;
 
-trait State: Eq + PartialEq + Copy + Clone {}
+    fn peek(&mut self) -> Option<&Self::Item> {
+        self.as_mut().peek()
+    }
 
-trait StateSet {
-    type Item: State;
-    fn contains(&self, state: Self::Item) -> bool;
-}
+    fn next(&mut self) -> Option<Self::Item> {
+        self.as_mut().next()
+    }
 
-impl State for usize {}
-impl State for &'static str {}
-
-impl<S: State> StateSet for &[S] {
-    type Item = S;
-
-    fn contains(&self, state: Self::Item) -> bool {
-        <[S]>::contains(self, &state)
+    fn advance(&mut self) {
+        self.as_mut().advance()
     }
 }
 
-impl<S: State> StateSet for S {
-    type Item = S;
-
-    fn contains(&self, state: Self::Item) -> bool {
-        self.eq(&state)
-    }
+trait IntoSequence {
+    type Seq: Sequence;
+    fn into_sequence(self) -> Self::Seq;
 }
 
-impl<S: State, const N: usize> StateSet for [S; N] {
-    type Item = S;
+trait ParseError {
+    fn not_finish() -> Self;
+}
 
-    fn contains(&self, state: Self::Item) -> bool {
-        <[S]>::contains(self, &state)
-    }
+impl ParseError for () {
+    fn not_finish() -> Self {}
+}
+
+trait MatchAll<Seq> {
+    type StateType: State;
+    type ErrorType: ParseError;
+    fn trans_state(
+        &mut self,
+        curr: Self::StateType,
+        input: &mut Seq,
+    ) -> Result<Self::StateType, Self::ErrorType>;
+}
+
+trait State: PartialEq {
+    fn is_final(&self) -> bool;
+    fn start() -> Self;
 }
 
 mod dfa {
-    use crate::{Sequence, State, StateSet, Trans};
-
-    pub fn parse<I, S: State>(
-        start: S,
-        stop: impl StateSet<Item = S>,
-        mut seq: impl Sequence<Item = I>,
-        trans: impl Trans<I, S>,
-    ) -> bool {
-        let mut curr = start;
-        while let Some(inner) = seq.peek() {
-            let next = trans.trans(curr, &inner);
-            match next {
-                None => return stop.contains(curr),
-                Some(next) => {
-                    curr = next;
-                    seq.advance();
-                }
-            }
+    use crate::{IntoSequence, MatchAll, Sequence, State};
+    fn parse<Seq: Sequence, Parser: MatchAll<Seq>>(
+        mut seq: Seq,
+        mut trans: Parser,
+    ) -> Result<Parser::StateType, Parser::ErrorType> {
+        let mut curr = Parser::StateType::start();
+        while !curr.is_final() {
+            curr = trans.trans_state(curr, &mut seq)?
         }
-        true
+        Ok(curr)
+    }
+
+    pub fn parse_from<IntoSeq: IntoSequence, Parser: MatchAll<IntoSeq::Seq>>(
+        seq: IntoSeq,
+        trans: Parser,
+    ) -> Result<Parser::StateType, Parser::ErrorType> {
+        parse(seq.into_sequence(), trans)
+    }
+
+    pub fn parse_dyn<
+        Seq: Sequence + 'static,
+        IntoSeq: IntoSequence<Seq = Seq>,
+        Parser: MatchAll<Box<dyn Sequence<Item = Seq::Item>>>,
+    >(
+        seq: IntoSeq,
+        mut trans: Parser,
+    ) -> Result<Parser::StateType, Parser::ErrorType> {
+        let mut seq: Box<dyn Sequence<Item = Seq::Item>> = Box::new(seq.into_sequence());
+        let mut curr = Parser::StateType::start();
+        while !curr.is_final() {
+            curr = trans.trans_state(curr, &mut seq)?
+        }
+        Ok(curr)
     }
 }
 
 fn main() {
-    let metadata = "asd12a3";
-    struct StrSeq<'a> {
-        data: &'a [u8],
-        ptr: usize,
-    }
-    impl Sequence for StrSeq<'_> {
-        type Item = u8;
-
-        fn peek(&self) -> Option<&Self::Item> {
-            self.data.get(self.ptr)
-        }
-
-        fn advance(&mut self) {
-            self.ptr += 1;
-        }
-    }
-
-    #[derive(Copy, Clone, Eq, PartialEq)]
-    enum IdentityState {
-        Start,
-        StartWithAlpha,
-    }
-
-    impl State for IdentityState {}
-
-    struct T;
-    impl Trans<u8, IdentityState> for T {
-        fn trans(&self, curr: IdentityState, input: &u8) -> Option<IdentityState> {
-            if !input.is_ascii_alphanumeric() {
-                return None;
-            }
-            match curr {
-                IdentityState::Start => {
-                    if input.is_ascii_digit() {
-                        None
-                    } else {
-                        Some(IdentityState::StartWithAlpha)
-                    }
-                }
-                a => Some(a),
-            }
-        }
-    }
-
-    let ok = dfa::parse(
-        IdentityState::Start,
-        IdentityState::StartWithAlpha,
-        StrSeq {
-            data: metadata.as_bytes(),
-            ptr: 0,
-        },
-        T,
-    );
-    println!("Hello, world! {}", ok);
+    test_number();
+    trans_table::test();
 }
